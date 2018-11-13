@@ -25,21 +25,19 @@ Agent::~Agent ()
 
 void Agent::Initialize ()
 {
+	AddToFrontier(12);
+	AddToFrontier(21);
 	agentHasGold = false;
 	actionList.clear();
 	currentLocation = Location(1, 1);
 	agentOrientation = RIGHT;
-}
-
-void Agent::GetRandomGoal()
-{
-	goalLocation = Location((rand() % 4) + 1, (rand() % 4) + 1);
+	breezeLocations.insert(-11);
 }
 
 void Agent::GetAPath()
 {
+	int goalkey;
 	list<Action> actionList2;
-	int tries = 25;
 	do {
 		if (!agentHasGold && goldLocation.X != -1)
 		{
@@ -60,25 +58,9 @@ void Agent::GetAPath()
 		}
 		else 
 		{
-			if (IsLocationValid(Location(3, 1)))
-			{
-				goalLocation = Location(3, 1);
-			}
-			else if (IsLocationValid(Location(4, 4)))
-			{
-				goalLocation = Location(4, 4);
-			} 
-			else if (IsLocationValid(Location(1, 4)))
-			{
-				goalLocation = Location(1, 4);
-			}
-			else
-			{
-				GetRandomGoal();
-			}
+			goalLocation = GetBestFrontierLocation(frontierProbabilities);
 		}
-		tries--;
-	} while (!IsLocationValid(goalLocation) && tries > 0);
+	} while (!IsLocationValid(goalLocation));
 	actionList2 = searchEngine.FindPath(currentLocation, agentOrientation, goalLocation, LEFT);
 	actionList.splice(actionList.end(), actionList2);
 }
@@ -94,11 +76,16 @@ bool Agent::IsLocationValid(Location location)
 Action Agent::Process (Percept& percept)
 {
 	Action action;
-	for(auto i : searchEngine.safeLocations)
-	{
-		cout << "Safe Location (" << i.X << "," << i.Y << ")\n";
-	}
 	UpdateVisitedLocations();
+	for (auto i : frontierLocations)
+	{
+		cout << i << endl;
+	}
+	if (percept.Breeze)
+	{
+		AddBreeze();
+		frontierProbabilities = GetPitProbabilities();
+	}
 	if (percept.Glitter)
 	{
 		goldLocation = currentLocation;
@@ -179,8 +166,215 @@ void Agent::UpdateVisitedLocations()
 		if (!(currentLocation == Location(1, 1)))
 		{
 			visitedLocations.insert(GenerateLocationKey(currentLocation));
+			if (frontierLocations.find(GenerateLocationKey(currentLocation)) != frontierLocations.end())
+			{
+				frontierLocations.erase(GenerateLocationKey(currentLocation));
+			}
 		}
 	}
+	CalculateNewFrontier();
+}
+
+void Agent::AddBreeze()
+{
+	breezeLocations.erase(-11);
+	if (breezeLocations.find(GenerateLocationKey(currentLocation)) == breezeLocations.end())
+	{
+		breezeLocations.insert(GenerateLocationKey(currentLocation));
+	}
+}
+
+void Agent::CalculateNewFrontier()
+{
+	int newkey = GenerateLocationKey(currentLocation);
+	AddToFrontier(newkey + 10);
+	AddToFrontier(newkey - 10);
+	AddToFrontier(newkey + 1);
+	AddToFrontier(newkey - 1);
+
+}
+
+void Agent::AddToFrontier(int location)
+{
+	if (frontierLocations.find(location) == frontierLocations.end() &&
+		visitedLocations.find(location) == visitedLocations.end())
+	{
+		if (IsValidKey(location))
+		{
+			frontierLocations.insert(location);
+		}
+	}
+}
+
+bool Agent::IsValidKey(int key)
+{
+	bool valid = true;
+	if (key == 11 || key <= 10 || key % 10 == 0 || key % 10 > 4)
+	{
+		valid = false;
+	}
+	return valid;
+}
+
+set<int> Agent::BreezesGivenPits(vector<int> pits)
+{
+	set<int> theobreezes;
+	for (auto pit : pits)
+	{
+		if (frontierLocations.find(pit + 10) != frontierLocations.end())
+		{ 
+			theobreezes.insert(pit + 10);
+		}
+		if (frontierLocations.find(pit - 10) != frontierLocations.end())
+		{
+			theobreezes.insert(pit - 10);
+		}
+		if (frontierLocations.find(pit + 1) != frontierLocations.end())
+		{
+			theobreezes.insert(pit + 1);
+		}
+		if (frontierLocations.find(pit - 1) != frontierLocations.end())
+		{
+			theobreezes.insert(pit - 1);
+		}
+	}
+	return theobreezes;
+}
+
+vector<vector<int>> Agent::GetAllPossiblePits(vector<int> frontierprime)
+{
+	vector<vector<int>> result(0, vector<int>(0));
+	vector<int> temp;
+	int i, j;
+	for (i = 0; i < frontierprime.size(); i++)
+	{
+		for (j = 0; j < i; j++)
+		{
+			temp.clear();
+			temp = result[j];
+			temp.push_back(frontierprime[i]);
+			result.push_back(temp);
+		}
+		temp.clear();
+		temp.push_back(frontierprime[i]);
+		result.push_back(temp);
+	}
+
+	return result;
+}
+
+Location Agent::KeyToLocation(int key)
+{
+	int x = key / 10;
+	int y = key % 10;
+	return Location(x, y);
+}
+
+
+map<int, double> Agent::GetPitProbabilities()
+{
+	map<int, double> frontierProbs;
+	vector<int> frontierprime, frontierlocs;
+	vector<vector<int>> enumeratedpits;
+	double Ptrue, Pfalse, Pfrontier;
+	int temp;
+	for (auto i : frontierLocations)
+	{
+		cout << "debugi " << i << endl;
+		frontierlocs.push_back(i);
+	}
+	for(int i=0; i < frontierlocs.size(); i++)
+	{
+		frontierprime = frontierlocs;
+		temp = frontierprime[i];
+		Ptrue = 0.0;
+		Pfalse = 0.0;
+		cout << "debug1: " << frontierlocs.size() << endl;
+		frontierprime.erase(frontierprime.begin() + i);
+		enumeratedpits = GetAllPossiblePits(frontierprime);
+
+		for (int j = 0; i < enumeratedpits.size(); i++)
+		{
+			cout << "pit enums = " << enumeratedpits.size();
+			int num = enumeratedpits[j].size();
+			Pfrontier = 0.2 * num * 0.8 *(frontierLocations.size() - num);
+			cout << temp << " pfrontier : " << Pfrontier << endl;
+			enumeratedpits[j].push_back(temp);
+			if (ConsistentWithBreeze(enumeratedpits[j]))
+			{
+				Ptrue += Pfrontier;
+			}
+			else
+			{
+				Pfalse += Pfrontier;
+			}
+		}
+		cout << temp << " pit true: " << Ptrue << endl;
+		Ptrue = Ptrue * 0.2;
+		Pfalse = Pfalse * 0.8;
+		Ptrue = Ptrue / (Ptrue + Pfalse);
+		frontierProbs.insert(pair<int, double>(temp, Ptrue));
+	}
+	cout << "debug" << endl;
+	return frontierProbs;
+}
+
+bool Agent::ConsistentWithBreeze(vector<int> a)
+{
+	bool consistent = true;
+	set<int> temp = BreezesGivenPits(a);
+	cout << "size a: " << a.size() << endl;
+	if (temp.size() != 0)
+	{
+		for (auto i : temp)
+		{
+			cout << " temp : " << i << endl;
+			if (breezeLocations.find(i) == breezeLocations.end())
+			{
+				consistent = false;
+			}
+		}
+		for (auto i : breezeLocations)
+		{
+			cout << " breeze : " << i << endl;
+			if (temp.find(i) == temp.end())
+			{
+				consistent = false;
+			}
+		}
+	}
+	else
+	{
+		consistent = false;
+	}
+	cout << "consitent = " << consistent << endl;
+	return consistent;
+}
+
+Location Agent::GetBestFrontierLocation(map<int, double> frontierprobs)
+{
+	double prob = 0.0;
+	int loc = 0;
+	set<int>::iterator it = frontierLocations.begin();
+	Location returnLocation;
+	for (auto i : frontierprobs)
+	{ 
+		if (i.second < prob)
+		{
+			prob = i.second;
+			loc = i.first;
+		}
+	}
+	if (loc)
+	{
+		returnLocation = KeyToLocation(loc);
+	}
+	else
+	{
+		
+		returnLocation = KeyToLocation(*it);
+	}
+	return returnLocation;
 }
 
 Orientation Agent::GetRandomOrientation()
